@@ -9,4 +9,4 @@
 /projects/*
 watcher.js
 .DS_Store
-./config.json
+config.json
