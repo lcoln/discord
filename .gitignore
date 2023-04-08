@@ -1,0 +1,12 @@
+/node_modules
+/apps
+/data
+/pages
+/.next
+/nohup.out
+/app.js
+/public
+/projects/*
+watcher.js
+.DS_Store
+./config.json
