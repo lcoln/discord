@@ -11,13 +11,17 @@ const wss = new WebSocket.Server({ port });
 
 wss.on('connection', function connection(ws) {
 	const count = client.listenerCount('messageCreate')
+	console.log({count})
 	function onDiscordMsg(message) {
 		// console.log({ message });
 		const result = message.attachments.first()
 		// const result = {}
 		// message.attachments?.forEach((v,k) => {result[k] = v})
-		console.log(ws.send, result?.url)
-		ws?.send?.(result?.url);
+		console.log(result, message.content, result?.url)
+		ws?.send?.(JSON.stringify({
+			url: result?.url,
+			content: message.content.replace(/-.*/, '').trim()
+		}));
 	}
 
 	ws.onclose = function(event) {
@@ -54,18 +58,4 @@ client.on('interactionCreate', async interaction => {
 	collector.on('collect', m => {
 		console.log(`Collected ${m.content}`);
 	});
-
-	if (!interaction.isCommand()) return;
-
-	const { commandName } = interaction;
-	if (commandName === 'ping') {
-		await interaction.reply('Pong!');
-	}
-	else if (commandName === 'server') {
-		await interaction.reply('Server info.');
-	}
-	else if (commandName === 'user') {
-		await interaction.reply('User info.');
-	}
-
 });
