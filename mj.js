@@ -1,42 +1,67 @@
 const { executablePath } = require('puppeteer');
 const puppeteer = require('puppeteer-extra');
 const CapSolverPlugin = require('puppeteer-extra-plugin-capsolver')();
+const formidable = require('formidable');
+
 const { DISCORD_U, DISCORD_P, CAP } = require('./config.json')
+let browser = null
+let page = null
 
 puppeteer.use(CapSolverPlugin);
 CapSolverPlugin.setHandler(CAP);
 
-const createPage = async () => {
-  const browser = await puppeteer.launch({
+const interceptUrl = (page, url) => {
+  return new Promise((yes) => {
+    page.on('request', req => {
+      // console.log(req.url(), 'req.url()')
+      if (req.url() === url) {
+        return yes(req)
+      }
+    })
+  })
+}
+
+const waitForRequestPromise = async (_page, innerHTML, shouldInclude = true) => {
+  const checkForContent = `
+    new Promise((resolve, reject) => {
+      const observer = new MutationObserver((mutationsList, observer) => {
+        const result = document.body.innerHTML.includes("${innerHTML}");
+        const yes = ${shouldInclude} ? result : !result;
+        if (yes) {
+          resolve();
+          observer.disconnect();
+        }
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+    });
+  `;
+  await _page.evaluate(checkForContent);
+}
+
+const createMainPage = async (pageInfo = {}) => {
+  browser = await puppeteer.launch({
     args: ['--no-sandbox', '--disable-dev-shm-usage'],
     executablePath: executablePath(),
   });
-  // console.log(111111, cookie)
+  console.log('[launch success]')
 
-  const page = await browser.newPage();
+  page = await browser.newPage();
   await page.setUserAgent(
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:91.0) Gecko/20100101 Firefox/91.0'
   );
 
   // 登录
   await page.goto('https://discord.com/login');
-  // console.log(2222, cookies)
-  // await page.setCookie({"aa":"aa"})
-  console.log(222222)
-  await page.waitForTimeout(2000);
-  console.log(233333333)
+  console.log('[go to login page success]')
+  await page.waitForTimeout(1000);
   await page.type('input[name="email"]', DISCORD_U);
-  console.log(233333333112)
+  console.log('[type email success]')
   await page.type('input[name="password"]', DISCORD_P);
-  console.log(2333453463333112)
-  await page.waitForTimeout(2500);
-  // await page.screenshot({path: './test.png'})
+  console.log('[type password success]')
+  await page.waitForTimeout(1500);
   await page.click('button[type="submit"]');
   await page.waitForNavigation({ timeout: 6000 });
-  console.log(1234)
-  await page.waitForTimeout(3000);
-  console.log(2222223)
-  // await page.screenshot({path: './test.png'})
+  console.log('[login success]')
 
   // 等待主页面加载
   await page.waitForFunction(() => {
@@ -44,24 +69,16 @@ const createPage = async () => {
     return div && ['Find or start a conversation', '寻找或开始新的对话'].includes(div.innerHTML);
   });
 
-
   // 点击按钮开始新会话
   const newConversationButton = await page.$x(
     "//*/text()[contains(., '寻找或开始新的对话') or contains(., 'Find or start a conversation')]/parent::*"
   );
-  await page.waitForTimeout(2000);
-  // console.log(newConversationButton[0].focus)
+  await page.waitForTimeout(1500);
   await newConversationButton[0].click();
-  console.log(4444444)
-  await page.waitForTimeout(2000);
-  // await page.screenshot({path: './test.png'})
-  // 等待搜索框出现
-  // await page.waitForFunction(() => {
-  //   const div = document.querySelector('input');
-  //   return div && div.placeholder === '想要去哪里？';
-  // });
+  console.log('[newConversationButton success]')
+  await page.waitForTimeout(1500);
   await page.waitForSelector('input[placeholder="想要去哪里？"], input[placeholder="Where would you like to go?"]', { timeout: 30000 });
-  console.log(555555)
+  console.log('[show input success]')
 
   // 搜索"imagi"
   await page.type('input[placeholder="想要去哪里？"], input[placeholder="Where would you like to go?"]', 'imagi');
@@ -69,86 +86,149 @@ const createPage = async () => {
     "//*/text()[contains(., 'imagineio')]/parent::*"
   );
   await searchResult.click();
-  console.log(666666)
+  console.log('[access imagineio channel success]')
 
   // 进入"imagine"频道
   await page.keyboard.press('Escape');
-  await page.waitForTimeout(100);
   
-  console.log(888888)
-
-  return page
+  console.log('[Escape success]')
+  const info = await getPageInfo(page);
+  pageInfo.cookies = info.cookies
+  pageInfo.headers = info.headers
+  console.log('[getPageInfo success]')
 }
 
-const main = async (page, prompt, count) => {
+const getPageInfo = async (page) => {
+  const cookies = (await page.cookies()).reduce((item, next) => {
+    item += `${next.name}=${next.value};`
+    return item
+  }, '');
+  const headers = await interceptUrl(page, 'https://discord.com/api/v9/science')
+
+  return {
+    cookies,
+    headers: headers.headers()
+  }
+}
+
+const createNewPage = async () => {
+  console.log('[start createNewPage]')
+  const currentUrl = page.url()
+  console.log(`[currentUrl ${currentUrl}]`)
+  const tmpPage = await browser.newPage();
+  await tmpPage.goto(currentUrl);
+  await tmpPage.waitForXPath('//*[contains(text(), "Message #imagineio")]', { timeout: 60000 });
+  console.log(`[Message #imagineio show success]`)
+  await tmpPage.waitForTimeout(1000);
+  return tmpPage
+}
+
+const createPic = async (prompt) => {
+
+  console.log('[start input]')
+
+  // 打开第二个标签页
+  const tmpPage = await createNewPage();
+
+  try {
   
-  // await page.waitForFunction(
-  //   () => {
-  //     const div = document.querySelector('button');
-  //     return div && div.innerHTML === '寻找或开始新的对话';
-  //   },
-  //   { timeout: 60000 } // 60 秒
-  // );
+    await Promise.all([
+      waitForRequestPromise(tmpPage, 'Create images with Midjourney'),
+      new Promise((yes) => {
+        setTimeout(async () => {
+          const res = await tmpPage.keyboard.type('/imagine')
+          yes(res)
+        }, 2000)
+      })
+    ])
 
-  console.log(3333333)
+    console.log(`[prompt ${prompt}]`)
+    
+    await tmpPage.keyboard.press('Enter');
+    await tmpPage.waitForTimeout(500);
+    await tmpPage.keyboard.type(prompt);
+    tmpPage.keyboard.press('Enter');
 
-  // 主要流程
-  const go = async () => {
-    await page.keyboard.type('/imagine');
-    await page.waitForTimeout(1000);
-    console.log({count})
+    const request = await interceptUrl(tmpPage, 'https://discord.com/api/v9/interactions')
+    const sessionId = request.postData().match(/"session_id":"([\w\W]*?)"/)?.[1]
+    
+    console.log(`[interceptUrl ${sessionId}]`)
 
-    // await page.waitForSelector('div:has-text("Midjourney Bot")', { timeout: 60000 });
-    await page.waitForFunction(() => {
-      const elements = Array.from(document.querySelectorAll('*'));
-      
-      for (const el of elements) {
-        if (el.textContent.includes('Midjourney Bot')) {
-          console.log(el)
-          return true; // 找到包含目标文本的元素，返回 true
-        }
-      }
-      
-      return false; // 没有找到匹配的元素，返回 false
-    }, { timeout: 60000 });
-
-    console.log(777777)
-  // await page.screenshot({path: './test.png'})
-  
-    // 点击"Create images with Midjourney"选项
-    const [createImagesOption] = await page.$x(
-      "//*/text()[contains(., '/imagine')]/parent::*"
-    );
-    // if (count > 3) {
-    //   await page.screenshot({path: './test.png'})
-    // }
-    // await page.waitForTimeout(200);
-    // const [createImagesOption] = await page.$$('button:has-text("Create images with Midjourney")');
-    await page.keyboard.press('Enter');
-    // await createImagesOption.click();
-    // 输入"test"并按Enter键
-    await page.waitForTimeout(500);
-    await page.keyboard.type(prompt);
-    await page.keyboard.press('Enter');
-    // await page.keyboard.type('');
-    await page.keyboard.press('Escape');
-    // await page.waitForTimeout(500);
-
-    // await page.keyboard.down('Control');
-    // await page.keyboard.press('A');
-    // await page.keyboard.up('Control');
-    // await page.keyboard.press('Backspace')
-    // await page.screenshot({path: './test.png'})
-    // 等待结果并关闭浏览器
-    // await page.waitForTimeout(5000);
-    // await page.keyboard.press('Escape');
-    // await browser.close();
-  };
-
-  await go();
+    await tmpPage.keyboard.press('Escape');
+    await tmpPage.close()
+    console.log(`[type prompt done]`)
+    return sessionId
+  } catch(e) {
+    await tmpPage.close()
+  }
 };
 
+const execMJByAction = async (action, getSessionId, waitRequest) => {
+  const tmpPage = await createNewPage();
+
+  try {
+  
+    await Promise.all([
+      waitForRequestPromise(tmpPage, waitRequest),
+      new Promise((yes) => {
+        setTimeout(async () => {
+          const res = await tmpPage.keyboard.type(action)
+          yes(res)
+        }, 2000)
+      })
+    ])
+
+    await tmpPage.keyboard.press('Enter');
+    await tmpPage.waitForTimeout(500);
+    tmpPage.keyboard.press('Enter');
+
+    let sessionId
+    if (getSessionId) {
+      const request = await interceptUrl(tmpPage, 'https://discord.com/api/v9/interactions')
+      sessionId = request.postData().match(/"session_id":"([\w\W]*?)"/)?.[1]
+    }
+    
+    console.log(`[interceptUrl ${sessionId}]`)
+
+    await tmpPage.keyboard.press('Escape');
+
+    await Promise.all([
+      waitForRequestPromise(tmpPage, waitRequest, false),
+      waitForRequestPromise(tmpPage, 'Sending command', false),
+      waitForRequestPromise(tmpPage, 'Midjourney Bot is thinking', false),
+      tmpPage.waitForTimeout(3000)
+      // new Promise((yes) => {
+      //   setTimeout(async () => {
+      //     yes()
+      //   }, 3000)
+      // })
+    ])
+
+    console.log(`[waitForRequestPromise ${waitRequest} disappear]`);
+    console.log(`[waitForRequestPromise Midjourney Bot is thinking disappear]`);
+    
+    return {
+      page: tmpPage,
+      sessionId
+    }
+  } catch(e) {
+    console.log(`[error ${e}]`)
+    await tmpPage.close()
+  }
+
+}
+
+const debugChrome = (page) => {
+	page.on('console', message => console.log(`${message.type().substr(0, 3).toUpperCase()} ${message.text()}`))
+    .on('pageerror', ({ message }) => console.log(message))
+    .on('response', async response => console.log(`${response.status()} ${response.url()} ${await response.text()}`))
+    .on('requestfailed', request => console.log(`${request.failure().errorText} ${request.url()}`))
+}
+
 module.exports = {
-  createPage,
-  main
+  createMainPage,
+  createNewPage,
+  createPic,
+  execMJByAction,
+  debugChrome
 };
